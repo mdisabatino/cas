@@ -33,11 +33,14 @@ import org.apereo.cas.ticket.refreshtoken.OAuth20RefreshTokenFactory;
 import org.apereo.cas.ticket.registry.TicketRegistry;
 import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
+
+import com.nimbusds.jwt.JWTClaimsSet;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
 import org.jooq.lambda.Unchecked;
+
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
@@ -192,19 +195,12 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
 
     protected AccessAndRefreshTokens generateAccessTokenForTokenExchange(final AccessTokenRequestContext tokenRequestContext) throws Throwable {
         val targetService = Objects.requireNonNullElseGet(tokenRequestContext.getTokenExchangeResource(), tokenRequestContext::getService);
-        return switch (tokenRequestContext.getRequestedTokenType()) {
-            case ACCESS_TOKEN, JWT -> {
-                val subjectToken = (OAuth20AccessToken) tokenRequestContext.getSubjectToken();
-                val exchangedAccessToken = exchangeTokenForAccessToken(targetService, subjectToken, tokenRequestContext);
-                val addedAccessToken = addAccessToken(tokenRequestContext, exchangedAccessToken);
-                yield new AccessAndRefreshTokens(addedAccessToken, null);
-            }
-            default -> {
-                val subjectToken = (OAuth20AccessToken) tokenRequestContext.getSubjectToken();
-                val exchangedAccessToken = exchangeTokenForAccessToken(targetService, subjectToken, tokenRequestContext);
-                yield new AccessAndRefreshTokens(exchangedAccessToken, null);
-            }
+        val exchangedAccessToken = exchangeTokenForAccessToken(targetService, tokenRequestContext);
+        val addedAccessToken = switch (tokenRequestContext.getRequestedTokenType()) {
+            case ACCESS_TOKEN, JWT -> addAccessToken(tokenRequestContext, exchangedAccessToken);
+            default -> exchangedAccessToken;
         };
+        return new AccessAndRefreshTokens(addedAccessToken, null);
     }
 
     private OAuth20AccessToken createAccessToken(final AccessTokenRequestContext tokenRequestContext,
@@ -227,9 +223,10 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
             tokenRequestContext.getGrantType());
     }
 
-    private OAuth20AccessToken exchangeTokenForAccessToken(final Service service, final OAuth20AccessToken accessToken,
+    private OAuth20AccessToken exchangeTokenForAccessToken(final Service service,
                                                            final AccessTokenRequestContext tokenRequestContext) throws Throwable {
-        val source = accessToken.getAuthentication();
+        val accessToken = tokenRequestContext.getSubjectToken() instanceof OAuth20AccessToken token ? token : null;
+        val source = accessToken == null ? tokenRequestContext.getAuthentication() : accessToken.getAuthentication();
         val scopes = new HashSet<>(tokenRequestContext.getScopes());
         scopes.retainAll(tokenRequestContext.getRegisteredService().getScopes());
         val credential = new BasicIdentifiableCredential(source.getPrincipal().getId());
@@ -241,8 +238,12 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
             tokenRequestContext.getRegisteredService(), scopes, accessToken);
         val exchangedAuthentication = DefaultAuthenticationBuilder.newInstance(exchangedPrincipal)
             .addAttribute(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
-        Map<String, Object> actorChain = accessToken.getGrantType() != OAuth20GrantTypes.TOKEN_EXCHANGE
+        Map<String, Object> actorChain = accessToken == null || accessToken.getGrantType() != OAuth20GrantTypes.TOKEN_EXCHANGE
             ? Map.of() : accessToken.getActor();
+        if (tokenRequestContext.getSubjectToken() instanceof JWTClaimsSet claims
+            && claims.getJSONObjectClaim(OAuth20Constants.CLAIM_ACT) != null) {
+            actorChain = OAuth20TokenExchangeActorUtils.copyActor(claims.getJSONObjectClaim(OAuth20Constants.CLAIM_ACT));
+        }
         if (tokenRequestContext.getActorToken() != null) {
             val actor = tokenRequestContext.getActorToken();
             val currentActor = new LinkedHashMap<String, Object>();
@@ -263,9 +264,20 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
         val ticketGrantingTicket = tokenRequestContext.getTicketGrantingTicket() == null || tokenRequestContext.getTicketGrantingTicket().isExpired()
             ? null : tokenRequestContext.getTicketGrantingTicket();
         val result = accessTokenFactory.create(service, exchangedAuthentication.build(), ticketGrantingTicket, scopes,
-            accessToken.getId(), tokenRequestContext.getRegisteredService().getClientId(),
-            accessToken.getClaims(),
-            accessToken.getResponseType(), OAuth20GrantTypes.TOKEN_EXCHANGE);
+            accessToken == null ? null : accessToken.getId(), tokenRequestContext.getRegisteredService().getClientId(),
+            accessToken == null ? Map.of() : accessToken.getClaims(),
+            accessToken == null ? OAuth20ResponseTypes.NONE : accessToken.getResponseType(), OAuth20GrantTypes.TOKEN_EXCHANGE);
+        val audience = new LinkedHashSet<>(tokenRequestContext.getTokenExchangeAudiences());
+        audience.addAll(tokenRequestContext.getTokenExchangeResources());
+        if (audience.isEmpty() && StringUtils.isNotBlank(tokenRequestContext.getTokenExchangeAudience())) {
+            audience.add(tokenRequestContext.getTokenExchangeAudience());
+        }
+        if (audience.isEmpty() && tokenRequestContext.getTokenExchangeResource() != null) {
+            audience.add(tokenRequestContext.getTokenExchangeResource().getId());
+        }
+        if (!audience.isEmpty()) {
+            result.setAudience(audience);
+        }
         if (!actorChain.isEmpty()) {
             result.setActor(actorChain);
         }

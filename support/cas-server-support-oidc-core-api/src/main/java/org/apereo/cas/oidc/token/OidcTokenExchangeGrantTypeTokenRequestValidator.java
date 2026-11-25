@@ -24,6 +24,11 @@ public class OidcTokenExchangeGrantTypeTokenRequestValidator extends OAuth20Toke
     }
 
     @Override
+    protected String resolveLocalIssuer() {
+        return getConfigurationContext().getObject().getIssuerService().determineIssuer(Optional.empty());
+    }
+
+    @Override
     protected OAuthRegisteredService extractRegisteredService(final String subjectTokenType,
                                                               final String subjectToken) throws Exception {
         val configurationContext = getConfigurationContext().getObject();

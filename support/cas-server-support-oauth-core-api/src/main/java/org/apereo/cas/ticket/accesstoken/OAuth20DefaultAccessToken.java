@@ -16,6 +16,7 @@ import lombok.Setter;
 import java.io.Serial;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * An OAuth access token implementation.
@@ -28,6 +29,8 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
 
     @Serial
     private static final long serialVersionUID = 2339545346159721563L;
+
+    private Set<String> audience = Set.of();
 
     private Map<String, Object> actor = Map.of();
 
@@ -75,8 +78,18 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
     }
 
     @Override
+    public Set<String> getAudience() {
+        return audience == null ? Set.of() : audience;
+    }
+
+    @Override
     public Map<String, Object> getActor() {
         return actor == null ? Map.of() : actor;
+    }
+
+    @Override
+    public void setAudience(final Set<String> audience) {
+        this.audience = Set.copyOf(audience);
     }
 
     @Override

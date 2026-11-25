@@ -12,6 +12,7 @@ import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import org.apereo.cas.util.serialization.JacksonObjectMapperFactory;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ import org.pac4j.core.context.WebContext;
 import org.pac4j.core.context.WebContextHelper;
 import org.pac4j.core.credentials.UsernamePasswordCredentials;
 import org.pac4j.core.credentials.extractor.BasicAuthExtractor;
+
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
@@ -100,6 +102,9 @@ public class DefaultOAuth20RequestParameterResolver implements OAuth20RequestPar
     public <T> T resolveJwtRequestParameter(final String jwtRequest, final RegisteredService registeredService,
                                             final String name, final Class<T> clazz) throws Exception {
         val jwt = jwtBuilder.unpack(Optional.ofNullable(registeredService), jwtRequest);
+        if (clazz == Object.class) {
+            return clazz.cast(jwt.getClaim(name));
+        }
         if (clazz.isArray()) {
             return clazz.cast(jwt.getStringArrayClaim(name));
         }
@@ -136,6 +141,30 @@ public class DefaultOAuth20RequestParameterResolver implements OAuth20RequestPar
     public Set<String> resolveRequestParameters(final WebContext context, final String name) {
         return resolveRequestParameters(List.of(name), context).getOrDefault(name, Set.of());
     }
+
+    @Override
+    public Set<String> resolveTokenExchangeTargets(final WebContext context, final String name) {
+        val requestObject = context.getRequestParameter(OAuth20Constants.REQUEST);
+        Object claim = null;
+        if (requestObject.isPresent() && jwtBuilder.getCasProperties().getAuthn().getOidc().getDiscovery().isRequestParameterSupported()) {
+            claim = resolveJwtRequestParameter(context, requestObject.get(), name, Object.class);
+        }
+        val values = claim == null ? resolveRequestParameter(context, name, List.class).orElseGet(List::of)
+            : claim instanceof Collection<?> collection ? collection : List.of(claim);
+        val result = new java.util.LinkedHashSet<String>();
+        for (val value : values) {
+            if (!(value instanceof String target)) {
+                throw new IllegalArgumentException("Token exchange targets must be strings");
+            }
+            if (target.isBlank()) {
+                throw new IllegalArgumentException("Token exchange target cannot be blank");
+            }
+            result.addAll(Arrays.asList(target.strip().split(" +")));
+        }
+        return result;
+    }
+
+
 
     @Override
     public Optional<String> resolveRequestParameter(final WebContext context,

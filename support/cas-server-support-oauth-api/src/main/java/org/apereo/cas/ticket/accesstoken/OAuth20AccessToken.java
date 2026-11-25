@@ -6,6 +6,7 @@ import org.apereo.cas.ticket.ServiceAwareTicket;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * An access token is an OAuth token which can be used multiple times and has a long lifetime.
@@ -21,6 +22,24 @@ public interface OAuth20AccessToken extends OAuth20Token, ServiceAwareTicket {
      * The prefix for access tokens.
      */
     String PREFIX = "AT";
+
+    /**
+     * Get the destinations captured when this token was issued.
+     *
+     * @return immutable destination identifiers, or empty for legacy tickets
+     */
+    default Set<String> getAudience() {
+        return Set.of();
+    }
+
+    /**
+     * Assign destinations before adding the ticket to the registry.
+     *
+     * @param audience authorized destinations
+     */
+    default void setAudience(final Set<String> audience) {
+        throw new UnsupportedOperationException("Access token implementation does not support destination metadata");
+    }
 
     /**
      * Get the protocol-generated delegation chain, independently of user attributes.

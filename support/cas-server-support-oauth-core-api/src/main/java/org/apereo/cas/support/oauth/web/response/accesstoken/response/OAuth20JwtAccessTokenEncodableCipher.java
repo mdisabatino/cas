@@ -147,6 +147,9 @@ class OAuth20JwtAccessTokenEncodableCipher implements EncodableCipher<String, St
     }
 
     protected Set<String> determineServiceAudience() {
+        if (token instanceof OAuth20AccessToken accessToken && !accessToken.getAudience().isEmpty()) {
+            return accessToken.getAudience();
+        }
         if (StringUtils.isNotBlank(tokenAudience)) {
             return Set.of(tokenAudience);
         }

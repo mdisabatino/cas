@@ -5,11 +5,13 @@ import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseModeTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+
 import org.apache.commons.lang3.tuple.Pair;
 import org.pac4j.core.context.CallContext;
 import org.pac4j.core.context.WebContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
@@ -250,4 +252,15 @@ public interface OAuth20RequestParameterResolver {
      * @return whether the parameter name is on the query string
      */
     boolean isParameterOnQueryString(WebContext context, String name);
+    /**
+     * Resolve all token-exchange target values, preserving scalar request objects.
+     *
+     * @param context request
+     * @param name audience or resource parameter
+     * @return target identifiers
+     */
+    default Set<String> resolveTokenExchangeTargets(final WebContext context, final String name) {
+        return resolveRequestParameters(context, name);
+    }
+
 }
