@@ -5,7 +5,9 @@ import org.apereo.cas.authentication.principal.Principal;
 import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.services.RegisteredService;
 import org.apereo.cas.support.oauth.OAuth20Constants;
+import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+import org.apereo.cas.support.oauth.util.OAuth20TokenExchangeActorUtils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
 import org.apereo.cas.ticket.OAuth20Token;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
@@ -15,6 +17,7 @@ import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.DateTimeUtils;
 import org.apereo.cas.util.crypto.EncodableCipher;
 import org.apereo.cas.util.function.FunctionUtils;
+
 import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.oauth2.sdk.auth.X509CertificateConfirmation;
 import com.nimbusds.oauth2.sdk.dpop.JWKThumbprintConfirmation;
@@ -25,6 +28,7 @@ import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
+
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -77,7 +81,7 @@ class OAuth20JwtAccessTokenEncodableCipher implements EncodableCipher<String, St
             .registeredService(Optional.of(registeredService))
             .issuer(determineIssuer())
             .service(Optional.ofNullable(service))
-            .resolveSubject(token.isStateless())
+            .resolveSubject(token.isStateless() && token.getGrantType() != OAuth20GrantTypes.TOKEN_EXCHANGE)
             .build();
     }
 
@@ -87,10 +91,18 @@ class OAuth20JwtAccessTokenEncodableCipher implements EncodableCipher<String, St
 
     protected Map<String, List<Object>> collectAttributes() throws Throwable {
         val accessTokenProps = configurationContext.getCasProperties().getAuthn().getOauth().getAccessToken();
-        if (token instanceof OAuth20AccessToken && accessTokenProps.isIncludeClaimsInJwt()) {
-            return collectClaimsForAccessToken();
+        val attributes = token instanceof OAuth20AccessToken && accessTokenProps.isIncludeClaimsInJwt()
+            ? collectClaimsForAccessToken() : new HashMap<String, List<Object>>();
+        attributes.remove(OAuth20Constants.CLAIM_ACT);
+        if (token instanceof OAuth20AccessToken accessToken && token.getGrantType() == OAuth20GrantTypes.TOKEN_EXCHANGE) {
+            for (val claim : List.of("iss", "sub", "aud", "exp", "iat", "nbf", "jti")) {
+                attributes.remove(claim);
+            }
+            if (!accessToken.getActor().isEmpty()) {
+                attributes.put(OAuth20Constants.CLAIM_ACT, List.of(OAuth20TokenExchangeActorUtils.copyActor(accessToken.getActor())));
+            }
         }
-        return new HashMap<>();
+        return attributes;
     }
 
     protected Map<String, List<Object>> collectClaimsForAccessToken() throws Throwable {
@@ -98,6 +110,8 @@ class OAuth20JwtAccessTokenEncodableCipher implements EncodableCipher<String, St
         val principal = configurationContext.getProfileScopeToAttributesFilter()
             .filter(service, activePrincipal, registeredService, (OAuth20AccessToken) token);
         val attributesToRelease = new HashMap<>(principal.getAttributes());
+
+        attributesToRelease.remove(OAuth20Constants.CLAIM_ACT);
         val originalAttributes = activePrincipal.getAttributes();
         if (originalAttributes.containsKey(OAuth20Constants.DPOP_CONFIRMATION)) {
             CollectionUtils.firstElement(originalAttributes.get(OAuth20Constants.DPOP_CONFIRMATION))

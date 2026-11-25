@@ -3,10 +3,13 @@ package org.apereo.cas.oidc.token;
 import org.apereo.cas.authentication.Authentication;
 import org.apereo.cas.oidc.OidcConfigurationContext;
 import org.apereo.cas.oidc.OidcConstants;
+import org.apereo.cas.services.OidcRegisteredService;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
+import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+import org.apereo.cas.support.oauth.util.OAuth20TokenExchangeActorUtils;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.response.accesstoken.ext.AccessTokenTokenExchangeGrantRequestExtractor;
 import org.apereo.cas.ticket.TicketGrantingTicket;
@@ -90,6 +93,12 @@ public class OidcAccessTokenTokenExchangeGrantRequestExtractor extends AccessTok
     }
 
     @Override
+    protected String resolveAccessTokenActorIssuer(final OAuthRegisteredService registeredService) {
+        return getConfigurationContext().getObject().getIssuerService().determineIssuer(
+            registeredService instanceof OidcRegisteredService oidcService ? Optional.of(oidcService) : Optional.empty());
+    }
+
+    @Override
     protected Authentication getActorTokenAuthentication(final WebContext webContext, final TokenExchangeRequest extractedRequest) throws Throwable {
         val configurationContext = getConfigurationContext().getObject();
         val actorToken = configurationContext.getRequestParameterResolver()
@@ -122,7 +131,8 @@ public class OidcAccessTokenTokenExchangeGrantRequestExtractor extends AccessTok
             val ticketGrantingTicketId = new String((byte[]) configurationContext.getTicketRegistry().getCipherExecutor().decode(base64DecodedSessionId), StandardCharsets.UTF_8);
             val ticketGrantingTicket = configurationContext.getTicketRegistry().getTicket(ticketGrantingTicketId, TicketGrantingTicket.class);
             Assert.notNull(ticketGrantingTicket, "Ticket granting ticket cannot be null");
-            return ticketGrantingTicket.getAuthentication();
+            return OAuth20TokenExchangeActorUtils.authentication(configurationContext,
+                ticketGrantingTicket.getAuthentication(), claims.getIssuer());
         }
         return super.getActorTokenAuthentication(webContext, extractedRequest);
     }

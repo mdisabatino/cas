@@ -7,17 +7,22 @@ import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
+import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.authenticator.Authenticators;
 import org.apereo.cas.support.oauth.web.response.accesstoken.ext.AccessTokenRequestContext;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.ticket.idtoken.IdTokenGenerationContext;
 import org.apereo.cas.ticket.refreshtoken.OAuth20RefreshToken;
+
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.pac4j.core.profile.CommonProfile;
+
+import java.util.HashMap;
 import java.util.Set;
 import java.util.UUID;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -72,5 +77,56 @@ class OidcDefaultTokenGeneratorTests extends AbstractOidcTests {
         assertEquals(cibaRequest.getEncodedId(), oidcIdToken.claims().getStringClaimValue(OidcConstants.CLAIM_AUTH_REQ_ID));
         assertTrue(oidcIdToken.claims().hasClaim(OidcConstants.CLAIM_AT_HASH));
         assertTrue(oidcIdToken.claims().hasClaim(OidcConstants.CLAIM_RT_HASH));
+    }
+
+    @Test
+    void verifyTokenExchangeActorClaimFilteredByOidc() throws Throwable {
+        val registeredService = getOidcRegisteredService(UUID.randomUUID().toString());
+        registeredService.setSupportedGrantTypes(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE.getType()));
+        servicesManager.save(registeredService);
+
+        val service = RegisteredServiceTestUtils.getService("https://oauth.example.org");
+        val subjectToken = getAccessToken(registeredService.getClientId());
+        val actor = RegisteredServiceTestUtils.getAuthentication("service-a");
+        val tokenRequestContext = AccessTokenRequestContext.builder()
+                .grantType(OAuth20GrantTypes.TOKEN_EXCHANGE)
+                .requestedTokenType(OAuth20TokenExchangeTypes.JWT)
+                .registeredService(registeredService)
+                .service(service)
+                .subjectToken(subjectToken)
+                .actorToken(actor)
+                .scopes(Set.of(OidcConstants.StandardScopes.OPENID.getScope(),
+                        OidcConstants.StandardScopes.PROFILE.getScope()))
+                .build();
+
+        val result = oauthTokenGenerator.generate(tokenRequestContext);
+        val exchangedToken = (OAuth20AccessToken) result.getAccessToken().orElseThrow();
+        val authentication = exchangedToken.getAuthentication();
+        assertTrue(authentication.getAttributes().containsKey(OAuth20Constants.CLAIM_ACT),
+                "The token-exchange generator must create act from the validated actor");
+
+        val attributes = new HashMap<>(authentication.getPrincipal().getAttributes());
+        attributes.put(OAuth20Constants.CLAIM_ACT,
+                authentication.getAttributes().get(OAuth20Constants.CLAIM_ACT));
+        val principalWithActor = RegisteredServiceTestUtils.getPrincipal(
+                authentication.getPrincipal().getId(), attributes);
+        assertTrue(principalWithActor.getAttributes().containsKey(OAuth20Constants.CLAIM_ACT));
+
+        val nextExchange = AccessTokenRequestContext.builder()
+            .grantType(OAuth20GrantTypes.TOKEN_EXCHANGE)
+            .requestedTokenType(OAuth20TokenExchangeTypes.JWT)
+            .registeredService(registeredService)
+            .service(service)
+            .subjectToken(exchangedToken)
+            .actorToken(RegisteredServiceTestUtils.getAuthentication("service-b"))
+            .build();
+        val nextToken = (OAuth20AccessToken) oauthTokenGenerator.generate(nextExchange).getAccessToken().orElseThrow();
+        assertEquals("service-b", nextToken.getActor().get(OAuth20Constants.CLAIM_SUB));
+        assertEquals(exchangedToken.getActor(), nextToken.getActor().get(OAuth20Constants.CLAIM_ACT));
+
+        val filtered = profileScopeToAttributesFilter.filter(
+                service, principalWithActor, registeredService, exchangedToken);
+        assertFalse(filtered.getAttributes().containsKey(OAuth20Constants.CLAIM_ACT),
+                "The OIDC attribute filter drops act although the generator created it");
     }
 }

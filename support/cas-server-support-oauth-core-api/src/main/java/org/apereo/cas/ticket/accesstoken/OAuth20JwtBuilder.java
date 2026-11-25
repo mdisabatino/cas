@@ -17,6 +17,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import lombok.val;
 import org.jose4j.jwt.JwtClaims;
 import org.springframework.context.ConfigurableApplicationContext;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -71,7 +72,9 @@ public class OAuth20JwtBuilder extends JwtBuilder {
                 .registeredService(registeredService)
                 .applicationContext(getApplicationContext())
                 .build();
-            currentClaims.putAll(registeredService.getAttributeReleasePolicy().getAttributes(context));
+            val attributes = new HashMap<>(registeredService.getAttributeReleasePolicy().getAttributes(context));
+            attributes.remove(OAuth20Constants.CLAIM_ACT);
+            currentClaims.putAll(attributes);
         }
         return currentClaims;
     }

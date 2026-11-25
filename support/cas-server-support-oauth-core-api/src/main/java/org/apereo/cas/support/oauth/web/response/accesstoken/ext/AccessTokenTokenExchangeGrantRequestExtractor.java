@@ -7,6 +7,7 @@ import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+import org.apereo.cas.support.oauth.util.OAuth20TokenExchangeActorUtils;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
 import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20TokenExchangeAccessTokenDecoder;
@@ -169,12 +170,23 @@ public class AccessTokenTokenExchangeGrantRequestExtractor<T extends OAuth20Conf
             .orElseThrow();
         return switch (actorTokenType) {
             case ACCESS_TOKEN -> {
-                val token = OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, actorToken).ticket();
-                yield token.getAuthentication();
+                val accessToken = OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, actorToken);
+                val issuer = resolveAccessTokenActorIssuer(accessToken.registeredService());
+                yield OAuth20TokenExchangeActorUtils.authentication(configurationContext, accessToken.ticket(), issuer);
             }
             case JWT -> buildActorTokenAuthenticationFromJwt(actorToken, webContext);
             default -> throw new IllegalArgumentException("Actor token type %s is not supported".formatted(actorTokenType));
         };
+    }
+
+    /**
+     * Determine the local issuer to include in the access token actor identity.
+     *
+     * @param registeredService the service bound to the actor ticket
+     * @return the issuer identifier
+     */
+    protected String resolveAccessTokenActorIssuer(final OAuthRegisteredService registeredService) {
+        return getConfigurationContext().getObject().getCasProperties().getServer().getPrefix();
     }
 
     protected Authentication buildActorTokenAuthenticationFromJwt(final String actorToken, final WebContext webContext) throws Throwable {

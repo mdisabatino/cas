@@ -4,6 +4,7 @@ import org.apereo.cas.authentication.Authentication;
 import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
+import org.apereo.cas.support.oauth.util.OAuth20TokenExchangeActorUtils;
 import org.apereo.cas.ticket.BaseOAuth20Token;
 import org.apereo.cas.ticket.ExpirationPolicy;
 import org.apereo.cas.ticket.Ticket;
@@ -27,6 +28,8 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
 
     @Serial
     private static final long serialVersionUID = 2339545346159721563L;
+
+    private Map<String, Object> actor = Map.of();
 
     @Setter
     @Getter
@@ -69,6 +72,16 @@ public class OAuth20DefaultAccessToken extends BaseOAuth20Token implements OAuth
         this(id, service, authentication, expirationPolicy,
             ticketGrantingTicket, token, scopes, null,
             null, clientId, requestClaims, responseType, grantType);
+    }
+
+    @Override
+    public Map<String, Object> getActor() {
+        return actor == null ? Map.of() : actor;
+    }
+
+    @Override
+    public void setActor(final Map<String, Object> actor) {
+        this.actor = OAuth20TokenExchangeActorUtils.copyActor(actor);
     }
 
     @Override

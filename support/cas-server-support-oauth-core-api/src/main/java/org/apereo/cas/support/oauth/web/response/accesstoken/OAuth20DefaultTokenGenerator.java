@@ -14,6 +14,7 @@ import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.profile.OAuth20ProfileScopeToAttributesFilter;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+import org.apereo.cas.support.oauth.util.OAuth20TokenExchangeActorUtils;
 import org.apereo.cas.support.oauth.validator.token.device.InvalidOAuth20DeviceTokenException;
 import org.apereo.cas.support.oauth.validator.token.device.ThrottledOAuth20DeviceUserCodeApprovalException;
 import org.apereo.cas.support.oauth.validator.token.device.UnapprovedOAuth20DeviceUserCodeException;
@@ -30,7 +31,6 @@ import org.apereo.cas.ticket.device.OAuth20DeviceUserCodeFactory;
 import org.apereo.cas.ticket.refreshtoken.OAuth20RefreshToken;
 import org.apereo.cas.ticket.refreshtoken.OAuth20RefreshTokenFactory;
 import org.apereo.cas.ticket.registry.TicketRegistry;
-import org.apereo.cas.util.CollectionUtils;
 import org.apereo.cas.util.LoggingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +42,9 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -227,36 +229,47 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
 
     private OAuth20AccessToken exchangeTokenForAccessToken(final Service service, final OAuth20AccessToken accessToken,
                                                            final AccessTokenRequestContext tokenRequestContext) throws Throwable {
+        val source = accessToken.getAuthentication();
         val scopes = new HashSet<>(tokenRequestContext.getScopes());
         scopes.retainAll(tokenRequestContext.getRegisteredService().getScopes());
-
-        val credential = new BasicIdentifiableCredential(accessToken.getAuthentication().getPrincipal().getId());
+        val credential = new BasicIdentifiableCredential(source.getPrincipal().getId());
         var resolvedPrincipal = principalResolver.resolve(credential);
         if (resolvedPrincipal instanceof NullPrincipal) {
-            resolvedPrincipal = accessToken.getAuthentication().getPrincipal();
+            resolvedPrincipal = source.getPrincipal();
         }
         val exchangedPrincipal = profileScopeToAttributesFilter.filter(service, resolvedPrincipal,
             tokenRequestContext.getRegisteredService(), scopes, accessToken);
-
         val exchangedAuthentication = DefaultAuthenticationBuilder.newInstance(exchangedPrincipal)
-            .addAttribute(OAuth20Constants.GRANT_TYPE, accessToken.getGrantType().getType());
+            .addAttribute(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
+        Map<String, Object> actorChain = accessToken.getGrantType() != OAuth20GrantTypes.TOKEN_EXCHANGE
+            ? Map.of() : accessToken.getActor();
         if (tokenRequestContext.getActorToken() != null) {
-            exchangedAuthentication.addAttribute(OAuth20Constants.CLAIM_ACT,
-                CollectionUtils.wrap(OAuth20Constants.CLAIM_SUB, tokenRequestContext.getActorToken().getPrincipal().getId()));
+            val actor = tokenRequestContext.getActorToken();
+            val currentActor = new LinkedHashMap<String, Object>();
+            currentActor.put(OAuth20Constants.CLAIM_SUB, actor.getPrincipal().getId());
+            val issuer = actor.getAttributes().get("iss");
+            if (issuer != null && issuer.size() == 1) {
+                currentActor.put("iss", issuer.getFirst());
+            }
+            if (!actorChain.isEmpty()) {
+                currentActor.put(OAuth20Constants.CLAIM_ACT, actorChain);
+            }
+            actorChain = OAuth20TokenExchangeActorUtils.copyActor(currentActor);
+        }
+        if (!actorChain.isEmpty()) {
+            exchangedAuthentication.addAttribute(OAuth20Constants.CLAIM_ACT, actorChain);
         }
         val accessTokenFactory = (OAuth20AccessTokenFactory) ticketFactory.get(OAuth20AccessToken.class);
         val ticketGrantingTicket = tokenRequestContext.getTicketGrantingTicket() == null || tokenRequestContext.getTicketGrantingTicket().isExpired()
             ? null : tokenRequestContext.getTicketGrantingTicket();
-        return accessTokenFactory.create(
-            service,
-            exchangedAuthentication.build(),
-            ticketGrantingTicket,
-            scopes,
-            accessToken.getId(),
-            tokenRequestContext.getRegisteredService().getClientId(),
+        val result = accessTokenFactory.create(service, exchangedAuthentication.build(), ticketGrantingTicket, scopes,
+            accessToken.getId(), tokenRequestContext.getRegisteredService().getClientId(),
             accessToken.getClaims(),
-            accessToken.getResponseType(),
-            accessToken.getGrantType());
+            accessToken.getResponseType(), OAuth20GrantTypes.TOKEN_EXCHANGE);
+        if (!actorChain.isEmpty()) {
+            result.setActor(actorChain);
+        }
+        return result;
     }
 
     protected Ticket addAccessToken(final AccessTokenRequestContext tokenRequestContext,
