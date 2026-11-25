@@ -6,6 +6,7 @@ import org.apereo.cas.authentication.principal.PrincipalResolver;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+
 import lombok.val;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
@@ -22,8 +23,10 @@ import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.TestPropertySource;
+
 import java.util.Locale;
 import java.util.UUID;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -49,7 +52,8 @@ class OAuth20ClientIdClientSecretAuthenticatorTests {
     @Nested
     @TestPropertySource(properties = {
         "cas.authn.attribute-repository.stub.attributes.eduPersonAffiliation=developer",
-        "cas.authn.attribute-repository.stub.attributes.groupMembership=adopters"
+        "cas.authn.attribute-repository.stub.attributes.groupMembership=adopters",
+        "cas.authn.attribute-repository.stub.attributes.client_id=untrusted-principal-client"
     })
     class AttributeMappingTests extends BaseOAuth20AuthenticatorTests {
         @RetryingTest(2)
@@ -63,6 +67,7 @@ class OAuth20ClientIdClientSecretAuthenticatorTests {
             assertEquals(credentials.getUsername().toLowerCase(Locale.ENGLISH), credentials.getUserProfile().getId());
             assertNotNull(credentials.getUserProfile().getAttribute("eduPersonAffiliation"));
             assertNotNull(credentials.getUserProfile().getAttribute("groupMembership"));
+            assertEquals(credentials.getUsername(), credentials.getUserProfile().getAttribute(OAuth20Constants.CLIENT_ID));
         }
     }
 

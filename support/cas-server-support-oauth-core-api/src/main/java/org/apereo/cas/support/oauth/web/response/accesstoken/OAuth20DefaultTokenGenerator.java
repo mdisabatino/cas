@@ -253,7 +253,7 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
             ticketGrantingTicket,
             scopes,
             accessToken.getId(),
-            accessToken.getClientId(),
+            tokenRequestContext.getRegisteredService().getClientId(),
             accessToken.getClaims(),
             accessToken.getResponseType(),
             accessToken.getGrantType());

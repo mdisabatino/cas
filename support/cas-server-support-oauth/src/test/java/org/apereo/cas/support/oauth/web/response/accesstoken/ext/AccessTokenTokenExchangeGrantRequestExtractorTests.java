@@ -70,6 +70,7 @@ class AccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOAuth20
 
         val userProfile = new CommonProfile();
         userProfile.setId("casuser");
+        userProfile.addAttribute(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
         userProfile.addAttributes((Map) RegisteredServiceTestUtils.getTestAttributes());
         new ProfileManager(context, oauthDistributedSessionStore).save(true, userProfile, false);
 
@@ -100,6 +101,10 @@ class AccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOAuth20
 
         val response = new MockHttpServletResponse();
         val context = new JEEContext(request, response);
+        val profile = new CommonProfile();
+        profile.setId("casuser");
+        profile.addAttribute(OAuth20Constants.CLIENT_ID, service.getClientId());
+        new ProfileManager(context, oauthDistributedSessionStore).save(true, profile, false);
         assertEquals(OAuth20ResponseTypes.NONE, extractor.getResponseType());
         assertTrue(extractor.supports(context));
         val tokenContext = extractor.extract(context);

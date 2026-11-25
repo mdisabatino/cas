@@ -8,6 +8,7 @@ import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.authenticator.Authenticators;
+import org.apereo.cas.support.oauth.services.DefaultRegisteredServiceOAuthTokenExchangePolicy;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
 import org.apereo.cas.ticket.InvalidTicketException;
@@ -109,6 +110,9 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
         request.addParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
 
         servicesManager.save(registeredService);
+        val profile = new ProfileManager(context, oauthDistributedSessionStore).getProfile().orElseThrow();
+        profile.addAttribute(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
+        new ProfileManager(context, oauthDistributedSessionStore).save(true, profile, false);
         assertEquals(expectation, validator.validate(context));
     }
 
@@ -126,6 +130,10 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
         val token = getAccessToken(service.getServiceId(), service.getClientId());
         ticketRegistry.addTicket(token);
         request.setParameter(OAuth20Constants.CLIENT_ID, service.getClientId());
+        val profileManager = new ProfileManager(context, oauthDistributedSessionStore);
+        val authenticatedProfile = profileManager.getProfile().orElseThrow();
+        authenticatedProfile.addAttribute(OAuth20Constants.CLIENT_ID, service.getClientId());
+        profileManager.save(true, authenticatedProfile, false);
         val cipher = OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, service, token);
         val jwt = cipher.encode(token.getId());
         assertNotEquals(token.getId(), jwt);
@@ -148,6 +156,12 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
         assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
         request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
 
+        service.getAudience().add("another-client");
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, cipher.encode(token.getId()));
+        assertFalse(validator.validate(context));
+        service.getAudience().clear();
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
+
         val unregistered = getAccessToken(service.getServiceId(), "unregistered-client-" + UUID.randomUUID());
         ticketRegistry.addTicket(unregistered);
         request.setParameter(OAuth20Constants.SUBJECT_TOKEN, unregistered.getId());
@@ -156,6 +170,15 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
             OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, service, unregistered).encode(unregistered.getId()));
         assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
         request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
+
+        authenticatedProfile.removeAttribute(OAuth20Constants.CLIENT_ID);
+        profileManager.save(true, authenticatedProfile, false);
+        assertFalse(validator.validate(context));
+        authenticatedProfile.addAttribute(OAuth20Constants.CLIENT_ID, "another-client");
+        profileManager.save(true, authenticatedProfile, false);
+        assertFalse(validator.validate(context));
+        authenticatedProfile.addAttribute(OAuth20Constants.CLIENT_ID, service.getClientId());
+        profileManager.save(true, authenticatedProfile, false);
 
         val signature = jwt.lastIndexOf('.') + 1;
         val altered = jwt.substring(0, signature) + (jwt.charAt(signature) == 'A' ? 'B' : 'A') + jwt.substring(signature + 1);
@@ -225,6 +248,38 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
         assertInstanceOf(EncryptedJWT.class, JWTParser.parse(unsigned));
         request.setParameter(OAuth20Constants.SUBJECT_TOKEN, unsigned);
         assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+    }
+
+    @Test
+    void verifyRequestingClientPolicy() throws Throwable {
+        val origin = addRegisteredService(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE));
+        val caller = addRegisteredService(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE));
+        origin.setJwtAccessToken(true);
+        origin.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_KEY.getPropertyName(),
+            new DefaultRegisteredServiceProperty(UUID.randomUUID().toString() + UUID.randomUUID()));
+        origin.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_ENCRYPTION_ENABLED.getPropertyName(),
+            new DefaultRegisteredServiceProperty("false"));
+        origin.getAudience().add(caller.getClientId());
+        origin.setTokenExchangePolicy(new DefaultRegisteredServiceOAuthTokenExchangePolicy().setAllowedAudience(Set.of("^other$")));
+        caller.setTokenExchangePolicy(new DefaultRegisteredServiceOAuthTokenExchangePolicy().setAllowedAudience(Set.of("^resource$")));
+        servicesManager.save(origin);
+        servicesManager.save(caller);
+        val token = getAccessToken(origin.getServiceId(), origin.getClientId());
+        ticketRegistry.addTicket(token);
+        val profileManager = new ProfileManager(context, oauthDistributedSessionStore);
+        val profile = profileManager.getProfile().orElseThrow();
+        profile.addAttribute(OAuth20Constants.CLIENT_ID, caller.getClientId());
+        profileManager.save(true, profile, false);
+        val cipher = OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, origin, token);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, cipher.encode(token.getId()));
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType());
+        request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
+        request.setParameter(OAuth20Constants.AUDIENCE, "resource");
+        assertTrue(validator.validate(context));
+        request.setParameter(OAuth20Constants.AUDIENCE, "other");
+        assertFalse(validator.validate(context));
     }
 
     static Stream<Arguments> contextProvider() throws Exception {

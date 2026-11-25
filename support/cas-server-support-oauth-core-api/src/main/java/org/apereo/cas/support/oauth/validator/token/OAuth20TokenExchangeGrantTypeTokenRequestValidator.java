@@ -14,6 +14,8 @@ import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
 import com.nimbusds.jwt.proc.JWTClaimsSetVerifier;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
+import org.apache.commons.lang3.StringUtils;
+import org.pac4j.core.context.CallContext;
 import org.pac4j.core.context.WebContext;
 import org.pac4j.core.profile.ProfileManager;
 import org.pac4j.core.profile.UserProfile;
@@ -51,7 +53,25 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
         val requestedTokenType = requestParameterResolver.resolveRequestParameter(webContext, OAuth20Constants.REQUESTED_TOKEN_TYPE)
             .orElseGet(OAuth20TokenExchangeTypes.ACCESS_TOKEN::getType);
 
-        val registeredService = extractRegisteredService(subjectTokenType, subjectToken);
+        if (!(uProfile.getAttribute(OAuth20Constants.CLIENT_ID) instanceof String clientId) || StringUtils.isBlank(clientId)) {
+            return false;
+        }
+        val suppliedId = requestParameterResolver
+            .resolveClientIdAndClientSecret(new CallContext(webContext, configurationContext.getSessionStore())).getKey();
+        if (StringUtils.isNotBlank(suppliedId) && !clientId.equals(suppliedId)) {
+            return false;
+        }
+        val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientId);
+        if (registeredService == null || extractRegisteredService(subjectTokenType, subjectToken) == null) {
+            return false;
+        }
+        if (OAuth20TokenExchangeTypes.from(subjectTokenType) == OAuth20TokenExchangeTypes.ACCESS_TOKEN) {
+            val verified = OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, subjectToken);
+            if (verified.audience().isEmpty() ? !clientId.equals(verified.ticket().getClientId())
+                : !verified.audience().contains(clientId)) {
+                return false;
+            }
+        }
 
         val audit = AuditableContext.builder().registeredService(registeredService).build();
         val accessResult = configurationContext.getRegisteredServiceAccessStrategyEnforcer().execute(audit);

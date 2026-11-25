@@ -8,7 +8,9 @@ import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.web.response.accesstoken.ext.AccessTokenGrantRequestExtractor;
+import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.ticket.idtoken.IdTokenGenerationContext;
+
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -19,9 +21,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -48,6 +52,7 @@ class OidcAccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOid
         val context = new JEEContext(request, response);
 
         val userProfile = new CommonProfile();
+        userProfile.addAttribute(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
         userProfile.setId("casuser");
         userProfile.addAttributes((Map) RegisteredServiceTestUtils.getTestAttributes());
         val profileManager = new ProfileManager(context, oauthDistributedSessionStore);
@@ -79,7 +84,17 @@ class OidcAccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOid
         request.addParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
         request.addParameter(OAuth20Constants.AUDIENCE, registeredService.getClientId());
         
+        request.removeParameter(OAuth20Constants.ACTOR_TOKEN_TYPE);
+        request.removeParameter(OAuth20Constants.ACTOR_TOKEN);
+        assertThrows(IllegalArgumentException.class, () -> extractor.extract(context));
+        request.setParameter(OAuth20Constants.ACTOR_TOKEN_TYPE, OAuth20TokenExchangeTypes.DEVICE_SECRET.getType());
+        request.setParameter(OAuth20Constants.ACTOR_TOKEN, UUID.randomUUID().toString());
+        assertThrows(IllegalArgumentException.class, () -> extractor.extract(context));
+        request.setParameter(OAuth20Constants.ACTOR_TOKEN, idToken.deviceSecret());
         val tokenContext = extractor.extract(context);
         assertNotNull(tokenContext);
+        assertEquals(registeredService.getClientId(), profileManager.getProfile().orElseThrow().getAttribute(OAuth20Constants.CLIENT_ID));
+        val issued = (OAuth20AccessToken) oauthTokenGenerator.generate(tokenContext).getAccessToken().orElseThrow();
+        assertEquals(accessToken.getAuthentication().getPrincipal().getId(), issued.getAuthentication().getPrincipal().getId());
     }
 }
