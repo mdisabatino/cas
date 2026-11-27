@@ -12,6 +12,7 @@ import org.apereo.cas.configuration.support.Beans;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
+import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.profile.OAuth20ProfileScopeToAttributesFilter;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.validator.token.device.InvalidOAuth20DeviceTokenException;
@@ -253,7 +254,8 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
             ticketGrantingTicket,
             scopes,
             accessToken.getId(),
-            tokenRequestContext.getRegisteredService().getClientId(),
+            tokenRequestContext.getSubjectTokenType() == OAuth20TokenExchangeTypes.ACCESS_TOKEN
+                ? tokenRequestContext.getRegisteredService().getClientId() : accessToken.getClientId(),
             accessToken.getClaims(),
             accessToken.getResponseType(),
             accessToken.getGrantType());

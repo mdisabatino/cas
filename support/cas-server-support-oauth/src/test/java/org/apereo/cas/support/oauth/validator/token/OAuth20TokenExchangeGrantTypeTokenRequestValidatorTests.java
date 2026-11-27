@@ -13,6 +13,8 @@ import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
 import org.apereo.cas.ticket.InvalidTicketException;
 import org.apereo.cas.ticket.Ticket;
+import org.apereo.cas.ticket.UniqueTicketIdGenerator;
+import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.token.JwtBuilder;
 import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.cipher.BaseStringCipherExecutor;
@@ -110,10 +112,22 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
         request.addParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
 
         servicesManager.save(registeredService);
-        val profile = new ProfileManager(context, oauthDistributedSessionStore).getProfile().orElseThrow();
-        profile.addAttribute(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
-        new ProfileManager(context, oauthDistributedSessionStore).save(true, profile, false);
+        if (type == OAuth20TokenExchangeTypes.ACCESS_TOKEN) {
+            val profiles = new ProfileManager(context, oauthDistributedSessionStore);
+            val profile = profiles.getProfile().orElseThrow();
+            profile.addAttribute(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
+            profiles.save(true, profile, false);
+        }
         assertEquals(expectation, validator.validate(context));
+
+        if (type == OAuth20TokenExchangeTypes.JWT) {
+            val claims = JWTParser.parse(subject.toString()).getJWTClaimsSet();
+            val reservedId = OAuth20AccessToken.PREFIX + UniqueTicketIdGenerator.SEPARATOR + UUID.randomUUID();
+            val accessTokenClaims = new JWTClaimsSet.Builder(claims).jwtID(reservedId).build();
+            request.setParameter(OAuth20Constants.SUBJECT_TOKEN, JwtBuilder.buildPlain(accessTokenClaims, Optional.of(registeredService)));
+            val failure = assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+            assertEquals("CAS access tokens must use the access_token subject type", failure.getMessage());
+        }
     }
 
     @Test
@@ -279,6 +293,10 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
         request.setParameter(OAuth20Constants.AUDIENCE, "resource");
         assertTrue(validator.validate(context));
         request.setParameter(OAuth20Constants.AUDIENCE, "other");
+        assertFalse(validator.validate(context));
+
+        request.setParameter(OAuth20Constants.AUDIENCE, "resource");
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, token.getId());
         assertFalse(validator.validate(context));
     }
 

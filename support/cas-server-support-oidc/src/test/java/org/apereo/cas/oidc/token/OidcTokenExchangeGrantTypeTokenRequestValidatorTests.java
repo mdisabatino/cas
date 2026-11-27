@@ -93,10 +93,6 @@ class OidcTokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOidcT
         val registeredService = getOidcRegisteredService(UUID.randomUUID().toString()).setEncryptIdToken(false);
         registeredService.setSupportedGrantTypes(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE.getType()));
         servicesManager.save(registeredService);
-        val authenticated = profileManager.getProfile().orElseThrow();
-        authenticated.addAttribute(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
-        profileManager.save(true, authenticated, false);
-        request.setParameter(OAuth20Constants.CLIENT_ID, registeredService.getClientId());
 
         request.addParameter(OAuth20Constants.AUDIENCE, UUID.randomUUID().toString());
         request.addParameter(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ID_TOKEN.getType());

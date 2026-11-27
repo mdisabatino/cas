@@ -6,7 +6,10 @@ import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.validator.token.OAuth20TokenExchangeGrantTypeTokenRequestValidator;
+import org.apereo.cas.ticket.UniqueTicketIdGenerator;
+import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import lombok.val;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.ObjectProvider;
 import java.util.List;
 import java.util.Optional;
@@ -33,6 +36,9 @@ public class OidcTokenExchangeGrantTypeTokenRequestValidator extends OAuth20Toke
             val clientIdInIdToken = OAuth20Utils.extractClientIdFromToken(subjectToken);
             val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientIdInIdToken);
             val claims = configurationContext.getIdTokenSigningAndEncryptionService().decode(subjectToken, Optional.ofNullable(registeredService));
+            if (StringUtils.defaultString(claims.getJwtId()).startsWith(OAuth20AccessToken.PREFIX + UniqueTicketIdGenerator.SEPARATOR)) {
+                throw new IllegalArgumentException("CAS access tokens must use the access_token subject type");
+            }
             val service = configurationContext.getWebApplicationServiceServiceFactory().createService(claims.getIssuer());
             service.getAttributes().put(OAuth20Constants.CLIENT_ID, List.of(clientIdInIdToken));
             return OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientIdInIdToken);

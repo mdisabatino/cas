@@ -8,6 +8,8 @@ import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
 import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20TokenExchangeAccessTokenDecoder;
+import org.apereo.cas.ticket.UniqueTicketIdGenerator;
+import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.util.function.FunctionUtils;
 import com.nimbusds.jose.proc.SimpleSecurityContext;
 import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
@@ -53,24 +55,27 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
         val requestedTokenType = requestParameterResolver.resolveRequestParameter(webContext, OAuth20Constants.REQUESTED_TOKEN_TYPE)
             .orElseGet(OAuth20TokenExchangeTypes.ACCESS_TOKEN::getType);
 
-        if (!(uProfile.getAttribute(OAuth20Constants.CLIENT_ID) instanceof String clientId) || StringUtils.isBlank(clientId)) {
-            return false;
-        }
-        val suppliedId = requestParameterResolver
-            .resolveClientIdAndClientSecret(new CallContext(webContext, configurationContext.getSessionStore())).getKey();
-        if (StringUtils.isNotBlank(suppliedId) && !clientId.equals(suppliedId)) {
-            return false;
-        }
-        val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientId);
-        if (registeredService == null || extractRegisteredService(subjectTokenType, subjectToken) == null) {
-            return false;
-        }
+        var registeredService = (OAuthRegisteredService) null;
         if (OAuth20TokenExchangeTypes.from(subjectTokenType) == OAuth20TokenExchangeTypes.ACCESS_TOKEN) {
+            if (!(uProfile.getAttribute(OAuth20Constants.CLIENT_ID) instanceof String clientId) || StringUtils.isBlank(clientId)) {
+                return false;
+            }
+            val suppliedId = requestParameterResolver
+                .resolveClientIdAndClientSecret(new CallContext(webContext, configurationContext.getSessionStore())).getKey();
+            if (StringUtils.isNotBlank(suppliedId) && !clientId.equals(suppliedId)) {
+                return false;
+            }
+            registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientId);
+            if (registeredService == null) {
+                return false;
+            }
             val verified = OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, subjectToken);
             if (verified.audience().isEmpty() ? !clientId.equals(verified.ticket().getClientId())
                 : !verified.audience().contains(clientId)) {
                 return false;
             }
+        } else {
+            registeredService = extractRegisteredService(subjectTokenType, subjectToken);
         }
 
         val audit = AuditableContext.builder().registeredService(registeredService).build();
@@ -103,6 +108,9 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
             case ACCESS_TOKEN -> OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, subjectToken).registeredService();
             case JWT -> {
                 val claimSet = configurationContext.getAccessTokenJwtBuilder().unpack(Optional.empty(), subjectToken);
+                if (StringUtils.defaultString(claimSet.getJWTID()).startsWith(OAuth20AccessToken.PREFIX + UniqueTicketIdGenerator.SEPARATOR)) {
+                    throw new IllegalArgumentException("CAS access tokens must use the access_token subject type");
+                }
                 jwtClaimsSetVerifier.verify(claimSet, new SimpleSecurityContext());
                 val service = configurationContext.getWebApplicationServiceServiceFactory().createService(claimSet.getIssuer());
                 service.getAttributes().put(OAuth20Constants.CLIENT_ID, List.of(claimSet.getSubject()));

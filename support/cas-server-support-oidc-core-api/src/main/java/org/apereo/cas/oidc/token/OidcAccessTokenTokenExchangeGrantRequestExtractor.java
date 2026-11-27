@@ -14,17 +14,12 @@ import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessTokenFactory;
 import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.function.FunctionUtils;
-
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Strings;
-import org.pac4j.core.context.CallContext;
 import org.pac4j.core.context.WebContext;
-import org.pac4j.core.profile.CommonProfile;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.util.Assert;
-
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -52,20 +47,8 @@ public class OidcAccessTokenTokenExchangeGrantRequestExtractor extends AccessTok
             .orElseThrow(() -> new IllegalArgumentException("Subject token cannot be undefined"));
 
         if (subjectTokenType == OAuth20TokenExchangeTypes.ID_TOKEN) {
-            val actorType = requestParameterResolver.resolveRequestParameter(webContext, OAuth20Constants.ACTOR_TOKEN_TYPE)
-                .map(OAuth20TokenExchangeTypes::from).orElse(null);
-            FunctionUtils.throwIf(actorType != OAuth20TokenExchangeTypes.DEVICE_SECRET,
-                () -> new IllegalArgumentException("Native SSO requires a device secret"));
-            val profile = extractUserProfile(webContext)
-                .orElseThrow(() -> new IllegalArgumentException("Authenticated OAuth client identity is required"));
-            if (!(profile.getAttribute(OAuth20Constants.CLIENT_ID) instanceof String requestingClientId) || StringUtils.isBlank(requestingClientId)) {
-                throw new IllegalArgumentException("Authenticated OAuth client identity is required");
-            }
-            val suppliedId = requestParameterResolver
-                .resolveClientIdAndClientSecret(new CallContext(webContext, configurationContext.getSessionStore())).getKey();
-            if (StringUtils.isNotBlank(suppliedId) && !requestingClientId.equals(suppliedId)) {
-                throw new IllegalArgumentException("Authenticated OAuth client identity is required");
-            }
+            val userProfile = extractUserProfile(webContext).orElseThrow();
+            val requestingClientId = userProfile.getId();
             
             val clientIdInIdToken = OAuth20Utils.extractClientIdFromToken(subjectToken);
             val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), clientIdInIdToken);
@@ -73,10 +56,9 @@ public class OidcAccessTokenTokenExchangeGrantRequestExtractor extends AccessTok
             val service = configurationContext.getWebApplicationServiceServiceFactory().createService(claimSet.getIssuer());
             service.getAttributes().put(OAuth20Constants.CLIENT_ID, List.of(requestingClientId));
             
-            val subjectProfile = new CommonProfile();
-            subjectProfile.setId(claimSet.getSubject());
-            claimSet.getClaimsMap().forEach(subjectProfile::addAttribute);
-            val authentication = configurationContext.getAuthenticationBuilder().build(subjectProfile, registeredService, webContext, service);
+            userProfile.setId(claimSet.getSubject());
+            claimSet.getClaimsMap().forEach(userProfile::addAttribute);
+            val authentication = configurationContext.getAuthenticationBuilder().build(userProfile, registeredService, webContext, service);
             val accessTokenFactory = (OAuth20AccessTokenFactory) configurationContext.getTicketFactory().get(OAuth20AccessToken.class);
             val scopes = configurationContext.getRequestParameterResolver().resolveRequestedScopes(webContext);
             val accessToken = accessTokenFactory.create(service, authentication, scopes, requestingClientId,
@@ -115,7 +97,7 @@ public class OidcAccessTokenTokenExchangeGrantRequestExtractor extends AccessTok
             Assert.isTrue(claims.hasClaim(OidcConstants.CLAIM_SESSION_REF), "Subject token must contain the claim %s".formatted(OidcConstants.CLAIM_SESSION_REF));
 
             val deviceSecret = configurationContext.getDeviceSecretGenerator().hash(actorToken.orElseThrow());
-            Assert.isTrue(Strings.CS.equals(deviceSecret, claims.getStringClaimValue(OidcConstants.DS_HASH)),
+            Assert.isTrue(Strings.CI.equals(deviceSecret, claims.getStringClaimValue(OidcConstants.DS_HASH)),
                 "Device secret hash does not match the subject token claim %s".formatted(OidcConstants.DS_HASH));
 
             val base64DecodedSessionId = EncodingUtils.decodeUrlSafeBase64(claims.getStringClaimValue(OidcConstants.CLAIM_SESSION_REF));
