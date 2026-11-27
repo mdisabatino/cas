@@ -4,21 +4,27 @@ import org.apereo.cas.authentication.CoreAuthenticationTestUtils;
 import org.apereo.cas.oidc.AbstractOidcTests;
 import org.apereo.cas.oidc.OidcConstants;
 import org.apereo.cas.oidc.web.controllers.profile.OidcUserProfileEndpointController;
+import org.apereo.cas.services.DefaultRegisteredServiceProperty;
+import org.apereo.cas.services.RegisteredServiceProperty.RegisteredServiceProperties;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20ClientAuthenticationMethods;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.services.DefaultRegisteredServiceOAuthTokenExchangePolicy;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
 import org.apereo.cas.ticket.TicketGrantingTicket;
 import org.apereo.cas.ticket.TicketGrantingTicketImpl;
+import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.ticket.expiration.TimeoutExpirationPolicy;
 import org.apereo.cas.util.EncodingUtils;
 import org.apereo.cas.util.crypto.CertUtils;
+import com.jayway.jsonpath.JsonPath;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
 import com.nimbusds.jwt.JWTParser;
+import com.nimbusds.jwt.SignedJWT;
 import com.nimbusds.oauth2.sdk.dpop.DefaultDPoPProofFactory;
 import com.nimbusds.oauth2.sdk.dpop.verifiers.InvalidDPoPProofException;
 import com.nimbusds.oauth2.sdk.token.DPoPAccessToken;
@@ -29,6 +35,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
@@ -141,6 +149,58 @@ class OidcAccessTokenEndpointControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.access_token").exists())
                 .andReturn();
+        }
+
+        @ParameterizedTest
+        @ValueSource(booleans = {false, true})
+        void verifyExchangeIssuedAccessToken(final boolean jwtAccessToken) throws Exception {
+            val service = getOidcRegisteredService(UUID.randomUUID().toString()).setEncryptIdToken(false);
+            service.setJwtAccessToken(jwtAccessToken);
+            service.setSupportedGrantTypes(Set.of(OAuth20GrantTypes.CLIENT_CREDENTIALS.getType(), OAuth20GrantTypes.TOKEN_EXCHANGE.getType()));
+            service.setTokenEndpointAuthenticationMethod(OAuth20ClientAuthenticationMethods.CLIENT_SECRET_POST.getType());
+            if (jwtAccessToken) {
+                service.getProperties().put(RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_KEY.getPropertyName(),
+                    new DefaultRegisteredServiceProperty(UUID.randomUUID().toString() + UUID.randomUUID()));
+                service.getProperties().put(RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_ENCRYPTION_ENABLED.getPropertyName(),
+                    new DefaultRegisteredServiceProperty("false"));
+            }
+            servicesManager.save(service);
+
+            val endpoint = "/cas/" + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.TOKEN_URL;
+            val issued = mvc.perform(post(endpoint).secure(true)
+                    .param(OAuth20Constants.CLIENT_ID, service.getClientId())
+                    .param(OAuth20Constants.CLIENT_SECRET, service.getClientSecret())
+                    .param(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.CLIENT_CREDENTIALS.getType()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.access_token").isString())
+                .andReturn().getResponse();
+            val accessToken = JsonPath.parse(issued.getContentAsString()).read("$.access_token", String.class);
+            val decoder = OAuth20JwtAccessTokenEncoder.toDecodableCipher(oidcAccessTokenJwtBuilder);
+            val ticket = ticketRegistry.getTicket(decoder.decode(accessToken), OAuth20AccessToken.class);
+            assertEquals(service.getClientId(), ticket.getClientId());
+            if (jwtAccessToken) {
+                val claims = assertInstanceOf(SignedJWT.class, JWTParser.parse(accessToken)).getJWTClaimsSet();
+                assertEquals(oidcIssuerService.determineIssuer(Optional.of(service)), claims.getIssuer());
+            } else {
+                assertEquals(ticket.getId(), accessToken);
+            }
+
+            val exchanged = mvc.perform(post(endpoint).secure(true)
+                    .param(OAuth20Constants.CLIENT_ID, service.getClientId())
+                    .param(OAuth20Constants.CLIENT_SECRET, service.getClientSecret())
+                    .param(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType())
+                    .param(OAuth20Constants.SUBJECT_TOKEN, accessToken)
+                    .param(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType())
+                    .param(OAuth20Constants.REQUESTED_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.access_token").isString())
+                .andExpect(jsonPath("$.issued_token_type").value(OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType()))
+                .andReturn().getResponse();
+            val exchangedToken = JsonPath.parse(exchanged.getContentAsString()).read("$.access_token", String.class);
+            val exchangedTicket = ticketRegistry.getTicket(decoder.decode(exchangedToken), OAuth20AccessToken.class);
+            assertNotEquals(ticket.getId(), exchangedTicket.getId());
+            assertEquals(service.getClientId(), exchangedTicket.getClientId());
+            assertEquals(ticket.getAuthentication().getPrincipal().getId(), exchangedTicket.getAuthentication().getPrincipal().getId());
         }
 
         @Test

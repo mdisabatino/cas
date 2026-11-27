@@ -1,21 +1,31 @@
 package org.apereo.cas.support.oauth.validator.token;
 
 import org.apereo.cas.AbstractOAuth20Tests;
+import org.apereo.cas.services.DefaultRegisteredServiceProperty;
+import org.apereo.cas.services.RegisteredServiceProperty;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.authenticator.Authenticators;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
+import org.apereo.cas.ticket.InvalidTicketException;
 import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.token.JwtBuilder;
+import org.apereo.cas.util.EncodingUtils;
+import org.apereo.cas.util.cipher.BaseStringCipherExecutor;
+import com.nimbusds.jwt.EncryptedJWT;
 import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.JWTParser;
+import com.nimbusds.jwt.SignedJWT;
 import lombok.val;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.pac4j.core.profile.CommonProfile;
 import org.pac4j.core.profile.ProfileManager;
@@ -28,12 +38,14 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import java.time.Clock;
 import java.time.ZonedDateTime;
+import java.util.Date;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
  * This is {@link OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests}.
@@ -98,6 +110,121 @@ class OAuth20TokenExchangeGrantTypeTokenRequestValidatorTests extends AbstractOA
 
         servicesManager.save(registeredService);
         assertEquals(expectation, validator.validate(context));
+    }
+
+    @Test
+    void verifyServiceWithJwtAccessToken() throws Throwable {
+        val service = addRegisteredService(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE));
+        service.setJwtAccessToken(true);
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_KEY.getPropertyName(),
+            new DefaultRegisteredServiceProperty(UUID.randomUUID().toString() + UUID.randomUUID()));
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_ENCRYPTION_ENABLED.getPropertyName(),
+            new DefaultRegisteredServiceProperty("false"));
+        servicesManager.save(service);
+        val token = getAccessToken(service.getServiceId(), service.getClientId());
+        ticketRegistry.addTicket(token);
+        request.setParameter(OAuth20Constants.CLIENT_ID, service.getClientId());
+        val cipher = OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, service, token);
+        val jwt = cipher.encode(token.getId());
+        assertNotEquals(token.getId(), jwt);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType());
+        request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
+        assertTrue(validator.validate(context));
+
+        val verifiedClaims = accessTokenJwtBuilder.unpack(Optional.of(service), jwt);
+        val missingIssuer = accessTokenJwtBuilder.build(service,
+            new JWTClaimsSet.Builder(verifiedClaims).issuer(null).build());
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, missingIssuer);
+        assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+        val expired = accessTokenJwtBuilder.build(service,
+            new JWTClaimsSet.Builder(verifiedClaims).expirationTime(new Date(0)).build());
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, expired);
+        assertThrows(Exception.class, () -> validator.validate(context));
+        assertFalse(token.isExpired());
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, JwtBuilder.buildPlain(verifiedClaims, Optional.of(service)));
+        assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
+
+        val unregistered = getAccessToken(service.getServiceId(), "unregistered-client-" + UUID.randomUUID());
+        ticketRegistry.addTicket(unregistered);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, unregistered.getId());
+        assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN,
+            OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, service, unregistered).encode(unregistered.getId()));
+        assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
+
+        val signature = jwt.lastIndexOf('.') + 1;
+        val altered = jwt.substring(0, signature) + (jwt.charAt(signature) == 'A' ? 'B' : 'A') + jwt.substring(signature + 1);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, altered);
+        assertThrows(Exception.class, () -> validator.validate(context));
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, jwt);
+
+        ticketRegistry.deleteTicket(token);
+        assertThrows(InvalidTicketException.class, () -> validator.validate(context));
+        ticketRegistry.addTicket(token);
+        when(token.isExpired()).thenReturn(true);
+        assertThrows(InvalidTicketException.class, () -> validator.validate(context));
+    }
+
+    @ParameterizedTest
+    @EnumSource(BaseStringCipherExecutor.CipherOperationsStrategyType.class)
+    void verifyNestedAccessJwt(final BaseStringCipherExecutor.CipherOperationsStrategyType strategy) throws Throwable {
+        val service = addRegisteredService(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE));
+        service.setJwtAccessToken(true);
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_ENCRYPTION_KEY.getPropertyName(),
+            new DefaultRegisteredServiceProperty(EncodingUtils.generateJsonWebKey(512)));
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_ENCRYPTION_ENABLED.getPropertyName(),
+            new DefaultRegisteredServiceProperty("true"));
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_KEY.getPropertyName(),
+            new DefaultRegisteredServiceProperty(UUID.randomUUID().toString() + UUID.randomUUID()));
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_CIPHER_STRATEGY_TYPE.getPropertyName(),
+            new DefaultRegisteredServiceProperty(strategy.name()));
+        servicesManager.save(service);
+        val token = getAccessToken(service.getServiceId(), service.getClientId());
+        ticketRegistry.addTicket(token);
+        val profileManager = new ProfileManager(context, oauthDistributedSessionStore);
+        val profile = profileManager.getProfile().orElseThrow();
+        profile.addAttribute(OAuth20Constants.CLIENT_ID, service.getClientId());
+        profileManager.save(true, profile, false);
+        val cipher = OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, service, token);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType());
+        request.setParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
+        val encoded = cipher.encode(token.getId());
+        val jwt = JWTParser.parse(encoded);
+        if (strategy == BaseStringCipherExecutor.CipherOperationsStrategyType.ENCRYPT_AND_SIGN) {
+            val signed = assertInstanceOf(SignedJWT.class, jwt);
+            assertNull(signed.getPayload().toJSONObject());
+        } else {
+            assertInstanceOf(EncryptedJWT.class, jwt);
+        }
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, encoded);
+        assertTrue(validator.validate(context));
+
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_ENABLED.getPropertyName(),
+            new DefaultRegisteredServiceProperty("false"));
+        servicesManager.save(service);
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, cipher.encode(token.getId()));
+        assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
+
+        service.getProperties().put(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_ENABLED.getPropertyName(),
+            new DefaultRegisteredServiceProperty("true"));
+        service.getProperties().remove(
+            RegisteredServiceProperty.RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_KEY.getPropertyName());
+        servicesManager.save(service);
+        val unsigned = cipher.encode(token.getId());
+        assertInstanceOf(EncryptedJWT.class, JWTParser.parse(unsigned));
+        request.setParameter(OAuth20Constants.SUBJECT_TOKEN, unsigned);
+        assertThrows(IllegalArgumentException.class, () -> validator.validate(context));
     }
 
     static Stream<Arguments> contextProvider() throws Exception {

@@ -7,7 +7,7 @@ import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
-import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20TokenExchangeAccessTokenDecoder;
 import org.apereo.cas.util.function.FunctionUtils;
 import com.nimbusds.jose.proc.SimpleSecurityContext;
 import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
@@ -80,10 +80,7 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
                                                               final String subjectToken) throws Exception {
         val configurationContext = getConfigurationContext().getObject();
         return switch (OAuth20TokenExchangeTypes.from(subjectTokenType)) {
-            case ACCESS_TOKEN -> {
-                val accessToken = configurationContext.getTicketRegistry().getTicket(subjectToken, OAuth20AccessToken.class);
-                yield OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), accessToken.getClientId());
-            }
+            case ACCESS_TOKEN -> OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, subjectToken).registeredService();
             case JWT -> {
                 val claimSet = configurationContext.getAccessTokenJwtBuilder().unpack(Optional.empty(), subjectToken);
                 jwtClaimsSetVerifier.verify(claimSet, new SimpleSecurityContext());

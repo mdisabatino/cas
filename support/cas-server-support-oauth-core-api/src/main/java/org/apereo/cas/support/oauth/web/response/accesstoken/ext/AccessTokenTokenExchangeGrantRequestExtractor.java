@@ -9,8 +9,7 @@ import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
-import org.apereo.cas.ticket.OAuth20Token;
-import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20TokenExchangeAccessTokenDecoder;
 import org.apereo.cas.util.function.FunctionUtils;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
@@ -101,9 +100,9 @@ public class AccessTokenTokenExchangeGrantRequestExtractor<T extends OAuth20Conf
             .orElseThrow(() -> new IllegalArgumentException("Subject token cannot be undefined"));
         return switch (subjectTokenType) {
             case ACCESS_TOKEN -> {
-                val token = configurationContext.getTicketRegistry().getTicket(subjectToken, OAuth20AccessToken.class);
-                val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), token.getClientId());
-                yield new TokenExchangeRequest(token, token.getService(), registeredService, token.getAuthentication());
+                val accessToken = OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, subjectToken);
+                val token = accessToken.ticket();
+                yield new TokenExchangeRequest(token, token.getService(), accessToken.registeredService(), token.getAuthentication());
             }
             case JWT -> {
                 val claimSet = configurationContext.getAccessTokenJwtBuilder().unpack(Optional.empty(), subjectToken);
@@ -145,7 +144,7 @@ public class AccessTokenTokenExchangeGrantRequestExtractor<T extends OAuth20Conf
             .orElseThrow();
         return switch (actorTokenType) {
             case ACCESS_TOKEN -> {
-                val token = configurationContext.getTicketRegistry().getTicket(actorToken, OAuth20Token.class);
+                val token = OAuth20TokenExchangeAccessTokenDecoder.decodeAccessToken(configurationContext, actorToken).ticket();
                 yield token.getAuthentication();
             }
             case JWT -> buildActorTokenAuthenticationFromJwt(actorToken, webContext);

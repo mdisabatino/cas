@@ -85,7 +85,8 @@ class AccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOAuth20
         val subjectToken = getAccessToken(service.getServiceId(), service.getClientId());
         ticketRegistry.addTicket(subjectToken);
 
-        val actorToken = getAccessToken(randomServiceUrl(), UUID.randomUUID().toString());
+        val actorService = addRegisteredService(Set.of(OAuth20GrantTypes.CLIENT_CREDENTIALS));
+        val actorToken = getAccessToken(actorService.getServiceId(), actorService.getClientId());
         ticketRegistry.addTicket(actorToken);
 
         request.addParameter(OAuth20Constants.SUBJECT_TOKEN, subjectToken.getId());
