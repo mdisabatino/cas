@@ -67,6 +67,14 @@ class OAuth20JwtAccessTokenEncodableCipher implements EncodableCipher<String, St
         val authentication = token.getAuthentication();
         val builder = JwtBuilder.JwtRequest.builder();
         val attributes = collectAttributes();
+        attributes.remove(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE);
+        if (token instanceof OAuth20AccessToken) {
+            val actorChain = authentication.getSingleValuedAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE, Map.class);
+            if (actorChain != null) {
+                attributes.put(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE,
+                    actorChain.isEmpty() ? List.of() : List.of(actorChain));
+            }
+        }
         return builder
             .serviceAudience(determineServiceAudience())
             .issueDate(DateTimeUtils.dateOf(authentication.getAuthenticationDate()))

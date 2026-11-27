@@ -85,7 +85,9 @@ class OAuth20DefaultTokenGeneratorTests {
             val webContext = new JEEContext(mockRequest, mockResponse);
             val authentication = RegisteredServiceTestUtils.getAuthentication("casuser");
             val tokenRequestContext = buildAccessTokenRequestContext(registeredService, authentication,
-                OAuth20GrantTypes.TOKEN_EXCHANGE, service, webContext).withActorToken(actorToken.getAuthentication());
+                OAuth20GrantTypes.TOKEN_EXCHANGE, service, webContext)
+                .withSubjectTokenType(OAuth20TokenExchangeTypes.ACCESS_TOKEN)
+                .withActorToken(actorToken.getAuthentication());
             val result = oauthTokenGenerator.generate(tokenRequestContext);
             assertNotNull(result);
             val mv = generateAccessTokenResponse(registeredService, service, result, tokenRequestContext);

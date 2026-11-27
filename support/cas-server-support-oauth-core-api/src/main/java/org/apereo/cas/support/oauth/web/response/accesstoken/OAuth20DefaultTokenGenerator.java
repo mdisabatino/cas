@@ -44,6 +44,7 @@ import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -172,6 +173,7 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
         }
 
         val authentication = finalizeAuthentication(tokenRequestContext, prepareAuthentication(tokenRequestContext));
+        authentication.getAttributes().remove(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE);
         LOGGER.debug("Creating access token for [{}]", tokenRequestContext);
         val accessToken = createAccessToken(tokenRequestContext, authentication);
         val addedAccessToken = addAccessToken(tokenRequestContext, accessToken);
@@ -239,9 +241,13 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
         val exchangedPrincipal = profileScopeToAttributesFilter.filter(service, resolvedPrincipal,
             tokenRequestContext.getRegisteredService(), scopes, accessToken);
 
+        val accessTokenExchange = tokenRequestContext.getSubjectTokenType() == OAuth20TokenExchangeTypes.ACCESS_TOKEN;
         val exchangedAuthentication = DefaultAuthenticationBuilder.newInstance(exchangedPrincipal)
             .addAttribute(OAuth20Constants.GRANT_TYPE, accessToken.getGrantType().getType());
-        if (tokenRequestContext.getActorToken() != null) {
+        if (accessTokenExchange) {
+            exchangedAuthentication.addAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE,
+                buildActorChain(accessToken, tokenRequestContext.getActorToken()));
+        } else if (tokenRequestContext.getActorToken() != null) {
             exchangedAuthentication.addAttribute(OAuth20Constants.CLAIM_ACT,
                 CollectionUtils.wrap(OAuth20Constants.CLAIM_SUB, tokenRequestContext.getActorToken().getPrincipal().getId()));
         }
@@ -254,11 +260,21 @@ public class OAuth20DefaultTokenGenerator implements OAuth20TokenGenerator {
             ticketGrantingTicket,
             scopes,
             accessToken.getId(),
-            tokenRequestContext.getSubjectTokenType() == OAuth20TokenExchangeTypes.ACCESS_TOKEN
-                ? tokenRequestContext.getRegisteredService().getClientId() : accessToken.getClientId(),
+            accessTokenExchange ? tokenRequestContext.getRegisteredService().getClientId() : accessToken.getClientId(),
             accessToken.getClaims(),
             accessToken.getResponseType(),
             accessToken.getGrantType());
+    }
+
+    private static Map<?, ?> buildActorChain(final OAuth20AccessToken subject, final Authentication actor) {
+        val stored = subject.getAuthentication().getSingleValuedAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE, Map.class);
+        val history = Objects.requireNonNullElse(stored, Map.of());
+        if (actor == null) {
+            return history;
+        }
+        val actorId = actor.getPrincipal().getId();
+        return history.isEmpty() ? Map.of(OAuth20Constants.CLAIM_SUB, actorId)
+            : Map.of(OAuth20Constants.CLAIM_SUB, actorId, OAuth20Constants.CLAIM_ACT, history);
     }
 
     protected Ticket addAccessToken(final AccessTokenRequestContext tokenRequestContext,

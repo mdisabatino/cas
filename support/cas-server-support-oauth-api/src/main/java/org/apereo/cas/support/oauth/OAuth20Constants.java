@@ -1,5 +1,7 @@
 package org.apereo.cas.support.oauth;
 
+import org.apereo.cas.CentralAuthenticationService;
+
 /**
  * This class has the main constants for the OAuth implementation.
  *
@@ -439,6 +441,11 @@ public interface OAuth20Constants {
      * act claim.
      */
     String CLAIM_ACT = "act";
+
+    /**
+     * Internal authentication attribute for the access token exchange actor chain.
+     */
+    String TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE = CentralAuthenticationService.NAMESPACE + ".oauth.tokenExchange.actorChain";
 
     /**
      * The sub claim.

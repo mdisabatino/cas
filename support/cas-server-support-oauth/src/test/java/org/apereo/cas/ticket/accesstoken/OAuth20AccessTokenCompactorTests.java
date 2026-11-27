@@ -2,18 +2,22 @@ package org.apereo.cas.ticket.accesstoken;
 
 import org.apereo.cas.AbstractOAuth20Tests;
 import org.apereo.cas.authentication.Authentication;
+import org.apereo.cas.authentication.DefaultAuthenticationBuilder;
 import org.apereo.cas.authentication.principal.Service;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
+import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.ticket.registry.TicketCompactor;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,6 +54,26 @@ class OAuth20AccessTokenCompactorTests extends AbstractOAuth20Tests {
         assertEquals(result.getResponseType(), token.getResponseType());
         assertEquals(result.getGrantType(), token.getGrantType());
         assertEquals(result.getAuthentication().getPrincipal(), token.getAuthentication().getPrincipal());
+    }
+
+    @Test
+    void verifyActorChainSurvivesCompaction() throws Throwable {
+        val service = RegisteredServiceTestUtils.getService("https://actor.oauth.org");
+        val registeredService = getRegisteredService(service.getId(), "clientid-actor", "secret-at");
+        servicesManager.save(registeredService);
+        val actorChain = Map.of(OAuth20Constants.CLAIM_SUB, "current-actor",
+            OAuth20Constants.CLAIM_ACT, Map.of(OAuth20Constants.CLAIM_SUB, "previous,actor"));
+        val authentication = DefaultAuthenticationBuilder.newInstance(RegisteredServiceTestUtils.getAuthentication())
+            .addAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE, actorChain)
+            .build();
+        val token = defaultAccessTokenFactory.create(service, authentication, Set.of(), registeredService.getClientId(),
+            OAuth20ResponseTypes.CODE, OAuth20GrantTypes.AUTHORIZATION_CODE);
+
+        val compacted = oauth20AccessTokenTicketCompactor.compact(token);
+        val restored = (OAuth20AccessToken) oauth20AccessTokenTicketCompactor.expand(compacted);
+
+        assertEquals(token.getGrantType(), restored.getGrantType());
+        assertEquals(actorChain, restored.getAuthentication().getSingleValuedAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE));
     }
 
     static Stream<Arguments> codeProvider() {

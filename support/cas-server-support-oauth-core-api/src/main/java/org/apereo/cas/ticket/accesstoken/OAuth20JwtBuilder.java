@@ -62,6 +62,7 @@ public class OAuth20JwtBuilder extends JwtBuilder {
     @Override
     protected Map<String, List<Object>> collectClaims(final JwtRequest payload) throws Throwable {
         val currentClaims = super.collectClaims(payload);
+        val actorChain = currentClaims.get(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE);
         if (payload.isResolveSubject() && payload.getRegisteredService().isPresent()) {
             val principal = getPrincipalResolver().resolve(new BasicIdentifiableCredential(payload.getSubject()));
             val registeredService = payload.getRegisteredService().get();
@@ -71,7 +72,15 @@ public class OAuth20JwtBuilder extends JwtBuilder {
                 .registeredService(registeredService)
                 .applicationContext(getApplicationContext())
                 .build();
-            currentClaims.putAll(registeredService.getAttributeReleasePolicy().getAttributes(context));
+            val releasedAttributes = registeredService.getAttributeReleasePolicy().getAttributes(context);
+            releasedAttributes.forEach((name, values) -> {
+                if (!OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE.equals(name)) {
+                    currentClaims.put(name, values);
+                }
+            });
+        }
+        if (actorChain != null) {
+            currentClaims.put(OAuth20Constants.CLAIM_ACT, actorChain);
         }
         return currentClaims;
     }

@@ -8,21 +8,27 @@ import org.apereo.cas.authentication.DefaultAuthenticationBuilder;
 import org.apereo.cas.authentication.DefaultAuthenticationHandlerExecutionResult;
 import org.apereo.cas.authentication.principal.PrincipalFactory;
 import org.apereo.cas.authentication.principal.ServiceFactory;
+import org.apereo.cas.support.oauth.OAuth20Constants;
 import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
+import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.ticket.Ticket;
 import org.apereo.cas.ticket.TicketFactory;
 import org.apereo.cas.ticket.expiration.FixedInstantExpirationPolicy;
 import org.apereo.cas.ticket.registry.TicketCompactor;
 import org.apereo.cas.util.DateTimeUtils;
+import org.apereo.cas.util.EncodingUtils;
 import com.google.common.base.Splitter;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
+import org.jose4j.json.JsonUtil;
 import org.springframework.beans.factory.ObjectProvider;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -35,6 +41,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @SuppressWarnings("EnumOrdinal")
 public class OAuth20AccessTokenCompactor implements TicketCompactor<OAuth20AccessToken> {
+    private static final String ACTOR_CHAIN_PREFIX = OAuth20Constants.CLAIM_ACT + '=';
+
     private final ObjectProvider<TicketFactory> ticketFactory;
     private final ServiceFactory serviceFactory;
     private final PrincipalFactory principalFactory;
@@ -74,6 +82,13 @@ public class OAuth20AccessTokenCompactor implements TicketCompactor<OAuth20Acces
         val grantType = OAuth20GrantTypes.values()[Integer.parseInt(structure.ticketElements().get(6))];
 
         val authentication = expandAuthentication(principalFactory, structure);
+        val actorChainField = structure.ticketElements().getLast();
+        /* A fragment of the original authentication field retains its credential separator. */
+        if (actorChainField.startsWith(ACTOR_CHAIN_PREFIX) && !actorChainField.contains(":")) {
+            val encoded = StringUtils.removeStart(actorChainField, ACTOR_CHAIN_PREFIX);
+            val json = new String(EncodingUtils.decodeUrlSafeBase64(encoded), StandardCharsets.UTF_8);
+            authentication.addAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE, List.of(JsonUtil.parseJson(json)));
+        }
         val accessTokenFactory = (OAuth20AccessTokenFactory) ticketFactory.getObject().get(getTicketType());
         val accessToken = accessTokenFactory.create(service, authentication, scopes, clientId, responseType, grantType);
         accessToken.setExpirationPolicy(new FixedInstantExpirationPolicy(structure.expirationTime()));
@@ -107,6 +122,11 @@ public class OAuth20AccessTokenCompactor implements TicketCompactor<OAuth20Acces
             val credentialTypes = authentication.getCredentials().stream()
                 .map(credential -> credential.getClass().getSimpleName()).collect(Collectors.joining("#"));
             builder.append(String.format("%s%s:%s:%s", DELIMITER, principalId, handlers, credentialTypes));
+            val actorChain = authentication.getSingleValuedAttribute(OAuth20Constants.TOKEN_EXCHANGE_ACTOR_CHAIN_ATTRIBUTE);
+            if (actorChain != null) {
+                builder.append(DELIMITER).append(ACTOR_CHAIN_PREFIX)
+                    .append(EncodingUtils.encodeUrlSafeBase64(OAuth20Utils.toJson(actorChain)));
+            }
         }
         return builder;
     }
