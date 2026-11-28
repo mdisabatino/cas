@@ -10,6 +10,7 @@ import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.services.RegisteredServiceOAuthResourceMatcher;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.util.function.FunctionUtils;
 import com.nimbusds.jose.proc.SimpleSecurityContext;
@@ -19,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.util.Assert;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -110,7 +112,9 @@ public class OAuth20TokenExchangeGrantTypeTokenRequestValidator<T extends OAuth2
         val configurationContext = getConfigurationContext().getObject();
         return switch (OAuth20TokenExchangeTypes.from(subjectTokenType)) {
             case ACCESS_TOKEN -> {
-                val accessToken = configurationContext.getTicketRegistry().getTicket(subjectToken, OAuth20AccessToken.class);
+                val tokenId = OAuth20JwtAccessTokenEncoder.toDecodableCipher(configurationContext.getAccessTokenJwtBuilder()).decode(subjectToken);
+                Assert.hasText(tokenId, "Subject access token cannot be resolved");
+                val accessToken = configurationContext.getTicketRegistry().getTicket(tokenId, OAuth20AccessToken.class);
                 yield OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), accessToken.getClientId());
             }
             case JWT -> {

@@ -8,6 +8,8 @@ import org.apereo.cas.support.oauth.OAuth20GrantTypes;
 import org.apereo.cas.support.oauth.OAuth20ResponseTypes;
 import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.profile.DefaultOAuth20UserProfile;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
+import org.apereo.cas.ticket.InvalidTicketException;
 import org.apereo.cas.ticket.OAuth20UnauthorizedScopeRequestException;
 import org.apereo.cas.token.JwtBuilder;
 import org.apereo.cas.util.RandomUtils;
@@ -20,6 +22,8 @@ import com.nimbusds.jwt.SignedJWT;
 import lombok.val;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -80,8 +84,9 @@ class AccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOAuth20
         assertNotNull(tokenContext);
     }
 
-    @Test
-    void verifyExtractionWithAccessTokenType() throws Throwable {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void verifyExtractionWithAccessTokenType(final boolean jwtActor) throws Throwable {
         val service = addRegisteredService(Set.of(OAuth20GrantTypes.TOKEN_EXCHANGE));
         val request = new MockHttpServletRequest();
 
@@ -89,13 +94,20 @@ class AccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOAuth20
         when(subjectToken.getScopes()).thenReturn(Set.of("read"));
         ticketRegistry.addTicket(subjectToken);
 
-        val actorToken = getAccessToken(randomServiceUrl(), UUID.randomUUID().toString());
+        val actorService = getRegisteredService(randomServiceUrl(), UUID.randomUUID().toString(), UUID.randomUUID().toString());
+        if (jwtActor) {
+            actorService.setJwtAccessToken(true);
+            servicesManager.save(actorService);
+        }
+        val actorToken = getAccessToken(actorService.getServiceId(), actorService.getClientId());
         ticketRegistry.addTicket(actorToken);
+        val actorValue = OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, actorService, actorToken).encode(actorToken.getId());
+        assertEquals(jwtActor, !actorValue.equals(actorToken.getId()));
 
         request.addParameter(OAuth20Constants.SUBJECT_TOKEN, subjectToken.getId());
         request.addParameter(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType());
 
-        request.addParameter(OAuth20Constants.ACTOR_TOKEN, actorToken.getId());
+        request.addParameter(OAuth20Constants.ACTOR_TOKEN, actorValue);
         request.addParameter(OAuth20Constants.ACTOR_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType());
 
         request.addParameter(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType());
@@ -114,7 +126,21 @@ class AccessTokenTokenExchangeGrantRequestExtractorTests extends AbstractOAuth20
         assertNull(tokenContext.getTokenExchangeResource());
         assertEquals(OAuth20TokenExchangeTypes.ACCESS_TOKEN, tokenContext.getSubjectTokenType());
         assertEquals(OAuth20TokenExchangeTypes.ACCESS_TOKEN, tokenContext.getRequestedTokenType());
-        assertNotNull(tokenContext.getActorToken());
+        assertSame(actorToken.getAuthentication(), tokenContext.getActorToken());
+        if (jwtActor) {
+            val refreshToken = getRefreshToken();
+            ticketRegistry.addTicket(refreshToken);
+            actorService.setJwtRefreshToken(true);
+            val refreshJwt = OAuth20JwtAccessTokenEncoder.toEncodableCipher(configurationContext, actorService,
+                refreshToken, refreshToken.getService(), false).encode(refreshToken.getId());
+            assertNotEquals(refreshToken.getId(), refreshJwt);
+            request.setParameter(OAuth20Constants.ACTOR_TOKEN, refreshJwt);
+            assertThrows(ClassCastException.class, () -> extractor.extract(request, response));
+
+            request.setParameter(OAuth20Constants.ACTOR_TOKEN, actorValue);
+            when(actorToken.isExpired()).thenReturn(true);
+            assertThrows(InvalidTicketException.class, () -> extractor.extract(request, response));
+        }
     }
 
     @Test

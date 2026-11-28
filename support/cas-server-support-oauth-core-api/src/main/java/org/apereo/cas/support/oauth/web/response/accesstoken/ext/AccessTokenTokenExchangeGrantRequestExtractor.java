@@ -10,6 +10,8 @@ import org.apereo.cas.support.oauth.OAuth20TokenExchangeTypes;
 import org.apereo.cas.support.oauth.services.OAuthRegisteredService;
 import org.apereo.cas.support.oauth.util.OAuth20Utils;
 import org.apereo.cas.support.oauth.web.endpoints.OAuth20ConfigurationContext;
+import org.apereo.cas.support.oauth.web.response.accesstoken.response.OAuth20JwtAccessTokenEncoder;
+import org.apereo.cas.ticket.InvalidTicketException;
 import org.apereo.cas.ticket.OAuth20Token;
 import org.apereo.cas.ticket.accesstoken.OAuth20AccessToken;
 import org.apereo.cas.util.function.FunctionUtils;
@@ -17,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.util.Assert;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -120,7 +123,9 @@ public class AccessTokenTokenExchangeGrantRequestExtractor<T extends OAuth20Conf
             .orElseThrow(() -> new IllegalArgumentException("Subject token cannot be undefined"));
         return switch (subjectTokenType) {
             case ACCESS_TOKEN -> {
-                val token = configurationContext.getTicketRegistry().getTicket(subjectToken, OAuth20AccessToken.class);
+                val tokenId = OAuth20JwtAccessTokenEncoder.toDecodableCipher(configurationContext.getAccessTokenJwtBuilder()).decode(subjectToken);
+                Assert.hasText(tokenId, "Subject access token cannot be resolved");
+                val token = configurationContext.getTicketRegistry().getTicket(tokenId, OAuth20AccessToken.class);
                 val registeredService = OAuth20Utils.getRegisteredOAuthServiceByClientId(configurationContext.getServicesManager(), token.getClientId());
                 yield new TokenExchangeRequest(token, token.getService(), registeredService, token.getAuthentication());
             }
@@ -177,7 +182,16 @@ public class AccessTokenTokenExchangeGrantRequestExtractor<T extends OAuth20Conf
         val configurationContext = getConfigurationContext().getObject();
         return switch (actorTokenType) {
             case ACCESS_TOKEN -> {
-                val token = configurationContext.getTicketRegistry().getTicket(actorToken, OAuth20Token.class);
+                val tokenId = OAuth20JwtAccessTokenEncoder.toDecodableCipher(configurationContext.getAccessTokenJwtBuilder()).decode(actorToken);
+                Assert.hasText(tokenId, "Actor access token cannot be resolved");
+                val opaqueActor = actorToken.equals(tokenId);
+                val ticketRegistry = configurationContext.getTicketRegistry();
+                val token = opaqueActor
+                    ? ticketRegistry.getTicket(tokenId, OAuth20Token.class)
+                    : ticketRegistry.getTicket(tokenId, OAuth20AccessToken.class);
+                if (!opaqueActor && (token == null || token.isExpired())) {
+                    throw new InvalidTicketException(tokenId);
+                }
                 yield Objects.requireNonNull(token.getAuthentication());
             }
             case JWT -> buildActorTokenAuthenticationFromJwt(actorToken, request, response);

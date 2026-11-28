@@ -4,6 +4,8 @@ import module java.base;
 import org.apereo.cas.authentication.CoreAuthenticationTestUtils;
 import org.apereo.cas.oidc.AbstractOidcTests;
 import org.apereo.cas.oidc.OidcConstants;
+import org.apereo.cas.services.DefaultRegisteredServiceProperty;
+import org.apereo.cas.services.RegisteredServiceProperty.RegisteredServiceProperties;
 import org.apereo.cas.services.RegisteredServiceTestUtils;
 import org.apereo.cas.support.oauth.OAuth20ClientAuthenticationMethods;
 import org.apereo.cas.support.oauth.OAuth20Constants;
@@ -140,6 +142,39 @@ class OidcAccessTokenEndpointControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.access_token").exists())
                 .andReturn();
+        }
+
+        @Test
+        void verifyExchangeCasIssuedJwtAccessToken() throws Exception {
+            val service = getOidcRegisteredService(UUID.randomUUID().toString());
+            service.setJwtAccessToken(true);
+            service.setSupportedGrantTypes(Set.of(OAuth20GrantTypes.CLIENT_CREDENTIALS.getType(), OAuth20GrantTypes.TOKEN_EXCHANGE.getType()));
+            service.setTokenEndpointAuthenticationMethod(OAuth20ClientAuthenticationMethods.CLIENT_SECRET_POST.getType());
+            service.getProperties().put(RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_SIGNING_KEY.getPropertyName(),
+                new DefaultRegisteredServiceProperty(UUID.randomUUID().toString() + UUID.randomUUID()));
+            service.getProperties().put(RegisteredServiceProperties.ACCESS_TOKEN_AS_JWT_ENCRYPTION_ENABLED.getPropertyName(),
+                new DefaultRegisteredServiceProperty("false"));
+            servicesManager.save(service);
+
+            val endpoint = "/cas/" + OidcConstants.BASE_OIDC_URL + '/' + OidcConstants.TOKEN_URL;
+            val issued = mvc.perform(post(endpoint).secure(true)
+                    .param(OAuth20Constants.CLIENT_ID, service.getClientId())
+                    .param(OAuth20Constants.CLIENT_SECRET, service.getClientSecrets().getFirst().getValue())
+                    .param(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.CLIENT_CREDENTIALS.getType()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse();
+            val subject = JsonPath.parse(issued.getContentAsString()).read("$.access_token", String.class);
+            assertNotNull(JWTParser.parse(subject).getJWTClaimsSet().getJWTID());
+
+            mvc.perform(post(endpoint).secure(true)
+                    .param(OAuth20Constants.CLIENT_ID, service.getClientId())
+                    .param(OAuth20Constants.CLIENT_SECRET, service.getClientSecrets().getFirst().getValue())
+                    .param(OAuth20Constants.GRANT_TYPE, OAuth20GrantTypes.TOKEN_EXCHANGE.getType())
+                    .param(OAuth20Constants.SUBJECT_TOKEN, subject)
+                    .param(OAuth20Constants.SUBJECT_TOKEN_TYPE, OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.issued_token_type").value(OAuth20TokenExchangeTypes.ACCESS_TOKEN.getType()))
+                .andExpect(jsonPath("$.access_token").isString());
         }
 
         @Test
